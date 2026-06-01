@@ -14,7 +14,7 @@ import plotly.express as px
 import pandas as pd
 
 # ✅ PRODUCTION: Hugging Face Backend URL
-API = "https://TERA_USERNAME-visionforge-backend.hf.space"
+API = "https://Zay7ab-visionforge-backend.hf.space"
 
 st.set_page_config(
     page_title="VisionForge",

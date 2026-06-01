@@ -1,0 +1,109 @@
+# ============================================================================
+# Docker Compose Configuration for VisionForge
+# ============================================================================
+# 
+# This file orchestrates two services:
+#   1. Backend: FastAPI server for ML training and inference
+#   2. Frontend: Streamlit app for user interface
+#
+# Services communicate via internal Docker network
+# Volumes mount local code for development and model persistence
+#
+# Usage:
+#   docker compose up          - Start all services
+#   docker compose down        - Stop all services
+#   docker compose logs -f     - View live logs
+#   docker compose restart     - Restart all services
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # BACKEND SERVICE - FastAPI Server
+  # ===========================================================================
+  backend:
+    # Build from local Dockerfile
+    build: ./backend
+    
+    # Container name for easy reference
+    container_name: teachable-backend
+    
+    # Port mapping: host:container
+    # 8000 on host maps to 8000 in container
+    # API endpoints accessible at http://localhost:8000
+    ports:
+      - "8000:8000"
+    
+    # Volume mounts for persistence and development
+    volumes:
+      # Persist trained model checkpoints locally
+      # Models saved in container persist even after restart
+      - ./backend/saved_models:/app/saved_models
+      
+      # Hot-reload: changes to main.py on host reflect in container
+      # (requires restart or dev server with auto-reload)
+      - ./backend/main.py:/app/main.py
+    
+    # Environment variables for the backend
+    environment:
+      # Disable CUDA memory caching to reduce GPU memory usage
+      # Useful if running on limited GPU memory
+      - PYTORCH_NO_CUDA_MEMORY_CACHING=1
+    
+    # Restart policy
+    # unless-stopped: auto-restart unless explicitly stopped
+    restart: unless-stopped
+    
+    # Health check configuration
+    # Verifies backend is responding before considering container "healthy"
+    healthcheck:
+      # Check endpoint: curl http://localhost:8000/
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      
+      # Time between health checks (seconds)
+      interval: 30s
+      
+      # Timeout for each check (seconds)
+      timeout: 10s
+      
+      # Number of retries before marking unhealthy
+      retries: 3
+
+  # ===========================================================================
+  # FRONTEND SERVICE - Streamlit Application
+  # ===========================================================================
+  frontend:
+    # Build from local Dockerfile
+    build: ./frontend
+    
+    # Container name for easy reference
+    container_name: teachable-frontend
+    
+    # Port mapping: host:container
+    # 8501 on host maps to 8501 in container
+    # UI accessible at http://localhost:8501
+    ports:
+      - "8501:8501"
+    
+    # Volume mounts for development
+    volumes:
+      # Hot-reload: changes to app.py reflect in frontend
+      - ./frontend/app.py:/app/app.py
+    
+    # Service dependencies
+    # Frontend waits for backend to be defined (not necessarily healthy)
+    # In practice, frontend handles backend being unavailable gracefully
+    depends_on:
+      - backend
+    
+    # Environment variables for Streamlit
+    environment:
+      # Streamlit port inside container (must match exposed port)
+      - STREAMLIT_SERVER_PORT=8501
+      
+      # Bind to all network interfaces (0.0.0.0) for Docker access
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    
+    # Restart policy
+    # unless-stopped: auto-restart unless explicitly stopped
+    restart: unless-stopped

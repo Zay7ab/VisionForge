@@ -12,6 +12,8 @@ from datetime import datetime
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
+import os
+import tempfile
 
 # ✅ PRODUCTION: Hugging Face Backend URL
 API = "https://Zay7ab-visionforge-backend.hf.space"
@@ -131,6 +133,8 @@ defaults = {
     "prediction_history": [],
     "active_tab": "🏠 Home",
     "selected_model_name": None,
+    "uploaded_model": None,
+    "uploaded_model_classes": [],
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -139,11 +143,11 @@ for k, v in defaults.items():
 # ── API Helpers ───────────────────────────────────────────────────────────
 def api(method, path, **kwargs):
     try:
-        r = getattr(requests, method)(f"{API}{path}", timeout=120, **kwargs)
+        r = getattr(requests, method)(f"{API}{path}", timeout=300, **kwargs)
         if r.ok:
             return r.json()
         return None
-    except:
+    except Exception as e:
         return None
 
 def api_upload(cls, img_bytes, fname):
@@ -198,14 +202,14 @@ with st.sidebar:
     
     st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
     
-    if st.session_state.trained:
+    if st.session_state.trained or st.session_state.uploaded_model:
         st.markdown("### 📈 Active Model")
-        st.metric("Accuracy", f"{st.session_state.accuracy}%")
-        st.metric("Classes", len(st.session_state.class_names))
+        acc = st.session_state.accuracy or 0
+        st.metric("Accuracy", f"{acc}%")
+        if st.session_state.class_names:
+            st.metric("Classes", len(st.session_state.class_names))
         if st.session_state.selected_model_name:
             st.caption(f"Model: {st.session_state.selected_model_name}")
-        if st.session_state.class_names:
-            st.caption(f"Classes: {', '.join(st.session_state.class_names)}")
     
     if st.session_state.classes_confirmed:
         st.markdown("### 📊 Dataset")
@@ -221,7 +225,7 @@ with st.sidebar:
             del st.session_state[k]
         st.rerun()
     
-    st.caption("v4.0 | MobileNetV3 ")
+    st.caption("v4.0 | MobileNetV3 | Made with ❤️")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -403,6 +407,7 @@ elif st.session_state.active_tab == "🎓 Train":
                     st.session_state.training_history = result.get("history", [])
                     st.session_state.confusion_matrix = result.get("confusion_matrix", [])
                     st.session_state.selected_model_name = None
+                    st.session_state.uploaded_model = None
                     st.success(f"✅ Training complete! Accuracy: **{result['accuracy']}%**")
                     st.rerun()
                 else:
@@ -447,100 +452,161 @@ elif st.session_state.active_tab == "🎓 Train":
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🔍 PREDICT PAGE (With Model Selection + Camera Fix)
+# 🔍 PREDICT PAGE (3 Options: Saved Model + Upload Model + Live Camera)
 # ═══════════════════════════════════════════════════════════════════════════
 elif st.session_state.active_tab == "🔍 Predict":
     st.markdown("# 🔍 Predict")
     st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
     
-    st.markdown("### 📂 Select Model for Prediction")
+    # ── TAB: Choose Model Source ──────────────────────────────────────
+    st.markdown("### 📂 Choose Model Source")
     
-    result = api("get", "/model/list")
-    saved_models = result.get("models", []) if result else []
+    model_tab1, model_tab2, model_tab3 = st.tabs(["💾 Saved Models", "📤 Upload Pre-Trained Model", "📌 Current Trained Model"])
     
-    model_options = []
-    
-    if st.session_state.trained:
-        current_label = f"📌 Current Trained Model | Accuracy: {st.session_state.accuracy}% | Classes: {', '.join(st.session_state.class_names)}"
-        model_options.append(current_label)
-    
-    for m in saved_models:
-        saved_label = f"💾 {m['name']} | Accuracy: {round(m['accuracy']*100,1)}% | Classes: {', '.join(m['classes'])}"
-        model_options.append(saved_label)
-    
-    if not model_options:
-        st.warning("⚠️ No models available! Please train a model first from the **🎓 Train** tab.")
-    else:
-        selected = st.selectbox(
-            "Choose which model to use:",
-            model_options,
-            key="model_selector"
-        )
+    with model_tab1:
+        st.markdown("**Load a previously saved model**")
+        result = api("get", "/model/list")
+        saved_models = result.get("models", []) if result else []
         
-        if selected.startswith("💾"):
-            model_name = selected.split(" | ")[0].replace("💾 ", "")
+        if saved_models:
+            saved_options = [f"💾 {m['name']} | Accuracy: {round(m['accuracy']*100,1)}% | Classes: {', '.join(m['classes'])}" for m in saved_models]
+            saved_selected = st.selectbox("Select saved model:", saved_options, key="saved_select")
             
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                if st.button("📂 Load Model", use_container_width=True):
-                    r = api("post", f"/model/load/{model_name}")
-                    if r:
-                        st.session_state.trained = True
-                        st.session_state.accuracy = r.get("accuracy", 0)
-                        st.session_state.class_names = r.get("classes", [])
-                        st.session_state.classes_confirmed = True
-                        st.session_state.img_counts = {c: 0 for c in r.get("classes", [])}
-                        st.session_state.selected_model_name = model_name
-                        st.session_state.training_history = r.get("history", [])
-                        st.session_state.confusion_matrix = r.get("confusion_matrix", [])
-                        st.success(f"✅ Model **{model_name}** loaded successfully!")
-                        st.rerun()
-                    else:
-                        st.error("Failed to load model.")
-            with col2:
-                st.info("👆 Click 'Load Model' to activate this saved model for prediction")
+            if st.button("📂 Load Selected Model", use_container_width=True, key="load_saved"):
+                model_name = saved_selected.split(" | ")[0].replace("💾 ", "")
+                r = api("post", f"/model/load/{model_name}")
+                if r:
+                    st.session_state.trained = True
+                    st.session_state.accuracy = r.get("accuracy", 0)
+                    st.session_state.class_names = r.get("classes", [])
+                    st.session_state.classes_confirmed = True
+                    st.session_state.selected_model_name = model_name
+                    st.session_state.uploaded_model = None
+                    st.session_state.training_history = r.get("history", [])
+                    st.session_state.confusion_matrix = r.get("confusion_matrix", [])
+                    st.success(f"✅ Model **{model_name}** loaded!")
+                    st.rerun()
         else:
-            st.session_state.selected_model_name = None
-            st.success("✅ Using current trained model - Ready for prediction!")
+            st.info("No saved models found. Train a model first!")
+    
+    with model_tab2:
+        st.markdown("**Upload a pre-trained .pkl model file**")
+        uploaded_file = st.file_uploader("Choose .pkl file", type=["pkl"], key="upload_model_file")
+        
+        if uploaded_file:
+            try:
+                # Save uploaded file temporarily
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp:
+                    tmp.write(uploaded_file.read())
+                    tmp_path = tmp.name
+                
+                # Load model
+                import pickle as pkl
+                with open(tmp_path, "rb") as f:
+                    model_data = pkl.load(f)
+                
+                st.session_state.uploaded_model = model_data
+                st.session_state.class_names = model_data.get("classes", [])
+                st.session_state.accuracy = model_data.get("accuracy", 0)
+                st.session_state.classes_confirmed = True
+                st.session_state.trained = True
+                st.session_state.selected_model_name = "Uploaded Model"
+                st.session_state.training_history = model_data.get("training_history", [])
+                st.session_state.confusion_matrix = model_data.get("confusion_matrix", [])
+                
+                st.success(f"✅ Model uploaded! Classes: {', '.join(st.session_state.class_names)}")
+                
+                # Clean up
+                os.unlink(tmp_path)
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Invalid model file: {str(e)}")
+    
+    with model_tab3:
+        st.markdown("**Use currently trained model**")
+        if st.session_state.trained:
+            st.success(f"✅ Current model ready! Accuracy: {st.session_state.accuracy}% | Classes: {', '.join(st.session_state.class_names)}")
+            st.session_state.uploaded_model = None
+        else:
+            st.warning("No trained model loaded. Train or load a model first.")
     
     st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
     
-    if st.session_state.trained:
-        st.markdown("### 📤 Upload Image to Predict")
-        st.caption(f"Active Model Classes: **{', '.join(st.session_state.class_names)}**")
+    # ── PREDICTION SECTION ──────────────────────────────────────────
+    if st.session_state.class_names:
+        st.markdown("### 🎥 Live Camera Prediction")
+        st.caption(f"Active Classes: **{', '.join(st.session_state.class_names)}**")
+        
+        if "live_camera" not in st.session_state:
+            st.session_state.live_camera = False
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if not st.session_state.live_camera:
+                if st.button("▶️ Start Live Camera", use_container_width=True, type="primary"):
+                    st.session_state.live_camera = True
+                    st.rerun()
+            else:
+                if st.button("⏹️ Stop Live Camera", use_container_width=True):
+                    st.session_state.live_camera = False
+                    st.rerun()
+        
+        if st.session_state.live_camera:
+            st.info("📷 Camera is LIVE! Point at something to predict.")
+            live_img = st.camera_input("Live Camera Feed", key="live_cam")
+            
+            if live_img:
+                try:
+                    img = Image.open(live_img).convert("RGB")
+                    test_bytes = pil_to_bytes(img)
+                    
+                    with st.spinner("Predicting..."):
+                        result = api_predict(test_bytes)
+                    
+                    if result:
+                        top = result["prediction"]
+                        conf = result["confidence"]
+                        
+                        if conf >= 90:
+                            color = "#4ade80"
+                        elif conf >= 70:
+                            color = "#fbbf24"
+                        else:
+                            color = "#f87171"
+                        
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, rgba(102,126,234,0.3), rgba(118,75,162,0.3)); 
+                                    border: 3px solid {color}; border-radius: 20px; 
+                                    padding: 1.5rem; text-align: center; margin: 1rem 0;">
+                            <h2 style="color: white; margin: 0; font-size: 2rem;">{top}</h2>
+                            <p style="color: {color}; font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0;">{conf}% confidence</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        with st.expander("📊 View All Probabilities"):
+                            for prob in result["probabilities"]:
+                                pct = round(prob["probability"] * 100, 1)
+                                st.markdown(f"**{prob['class']}**: {pct}%")
+                                st.progress(int(pct))
+                except Exception as e:
+                    st.error(f"Prediction error: {str(e)}")
+        
+        st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
+        
+        st.markdown("### 📁 Or Upload Image")
         
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.markdown("#### 📁 Input Source")
-            mode = st.radio("Choose input:", ["📁 Upload Image", "📷 Camera"], horizontal=True, key="test_mode")
-            test_bytes = None
-            
-            if mode == "📁 Upload Image":
-                f = st.file_uploader("Select an image", type=["jpg","jpeg","png","webp"], key="test_file")
-                if f:
-                    img = Image.open(f).convert("RGB")
-                    st.image(img, use_column_width=True)
-                    test_bytes = pil_to_bytes(img)
-            else:
-                # ✅ Camera with better guidance
-                st.info("📷 Allow camera permission when prompted. Then click 'Take a photo' below.")
-                cam = st.camera_input("Take a photo", key="cam")
-                if cam:
-                    try:
-                        img = Image.open(cam).convert("RGB")
-                        st.image(img, use_column_width=True)
-                        test_bytes = pil_to_bytes(img)
-                        st.success("✅ Photo captured! Predicting...")
-                    except Exception as e:
-                        st.error(f"❌ Camera error. Please allow camera permissions in browser settings.")
-                else:
-                    st.caption("👆 Click the camera button above to capture a photo")
+            f = st.file_uploader("Select an image", type=["jpg","jpeg","png","webp"], key="upload_img")
+            if f:
+                img = Image.open(f).convert("RGB")
+                st.image(img, use_column_width=True)
+                test_bytes = pil_to_bytes(img)
         
         with col2:
-            st.markdown("#### 🔮 Prediction Result")
-            if test_bytes:
-                with st.spinner("🔍 Analyzing image..."):
+            if f:
+                with st.spinner("🔍 Analyzing..."):
                     result = api_predict(test_bytes)
                 
                 if result:
@@ -560,45 +626,18 @@ elif st.session_state.active_tab == "🔍 Predict":
                     st.markdown(f"""
                     <div style="background: linear-gradient(135deg, rgba(102,126,234,0.15), rgba(118,75,162,0.15)); 
                                 border: 2px solid {border_color}; border-radius: 20px; 
-                                padding: 2rem; text-align: center; margin-bottom: 1rem;">
-                        <p style="color: rgba(255,255,255,0.5); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 2px; margin: 0;">Prediction Result</p>
-                        <h1 style="font-size: 3.5rem; color: white; margin: 0.5rem 0; font-weight: 900;">{top}</h1>
-                        <p style="font-size: 1.8rem; color: {text_color}; font-weight: 700; margin: 0;">{conf}%</p>
-                        <p style="color: rgba(255,255,255,0.4); font-size: 0.8rem; margin-top: 0.5rem;">confidence score</p>
+                                padding: 2rem; text-align: center;">
+                        <h1 style="font-size: 3.5rem; color: white; margin: 0.5rem 0;">{top}</h1>
+                        <p style="font-size: 1.8rem; color: {text_color}; font-weight: 700;">{conf}%</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    st.markdown("##### 📊 Class Probabilities")
                     for prob in result["probabilities"]:
                         pct = round(prob["probability"] * 100, 1)
-                        is_top = prob["class"] == top
-                        bar_color = "linear-gradient(90deg, #667eea, #764ba2)" if is_top else "linear-gradient(90deg, #4b5563, #6b7280)"
-                        
-                        st.markdown(f"""
-                        <div style="margin-bottom: 10px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <span style="color: white; font-weight: {'700' if is_top else '400'}; font-size: {'1rem' if is_top else '0.85rem'};">
-                                    {'🏆 ' if is_top else ''}{prob['class']}
-                                </span>
-                                <span style="color: {'#4ade80' if is_top else 'rgba(255,255,255,0.6)'}; font-size: 0.9rem; font-weight: {'700' if is_top else '400'};">
-                                    {pct}%
-                                </span>
-                            </div>
-                            <div style="background: rgba(255,255,255,0.08); height: {'10px' if is_top else '6px'}; border-radius: {'5px' if is_top else '3px'}; overflow: hidden;">
-                                <div style="background: {bar_color}; height: 100%; width: {pct}%; border-radius: {'5px' if is_top else '3px'}; transition: width 0.5s ease;"></div>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                else:
-                    st.error("❌ Prediction failed. Please check backend connection.")
-            else:
-                if mode == "📷 Camera":
-                    st.info("📷 Click the 'Take a photo' button to capture and get prediction.")
-                else:
-                    st.info("📁 Upload an image to get prediction.")
+                        st.markdown(f"**{prob['class']}**: {pct}%")
+                        st.progress(int(pct))
     else:
-        st.info("👈 Please select and load a model first to start predicting.")
+        st.info("👈 Please select or upload a model first.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -745,7 +784,7 @@ elif st.session_state.active_tab == "⚙️ Settings":
         <ul style="color: rgba(255,255,255,0.7);">
             <li><strong>Backend:</strong> FastAPI + PyTorch + MobileNetV3</li>
             <li><strong>Frontend:</strong> Streamlit + Plotly</li>
-            <li><strong>Features:</strong> Transfer Learning, Data Augmentation</li>
+            <li><strong>Features:</strong> Transfer Learning, Data Augmentation, Live Camera, Upload Pre-Trained Model</li>
             <li><strong>Privacy:</strong> 100% Local Processing</li>
         </ul>
     </div>

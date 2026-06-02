@@ -221,7 +221,7 @@ with st.sidebar:
             del st.session_state[k]
         st.rerun()
     
-    st.caption("v4.0 | MobileNetV3 | Made with ❤️")
+    st.caption("v4.0 | MobileNetV3 ")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

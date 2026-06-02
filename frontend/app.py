@@ -135,6 +135,7 @@ defaults = {
     "selected_model_name": None,
     "uploaded_model": None,
     "uploaded_model_classes": [],
+    "train_camera_active": False,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -147,7 +148,7 @@ def api(method, path, **kwargs):
         if r.ok:
             return r.json()
         return None
-    except Exception as e:
+    except:
         return None
 
 def api_upload(cls, img_bytes, fname):
@@ -303,7 +304,7 @@ if st.session_state.active_tab == "🏠 Home":
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🎓 TRAIN PAGE
+# 🎓 TRAIN PAGE (With Live Camera + Upload)
 # ═══════════════════════════════════════════════════════════════════════════
 elif st.session_state.active_tab == "🎓 Train":
     st.markdown("# 🎓 Train Your Model")
@@ -348,45 +349,82 @@ elif st.session_state.active_tab == "🎓 Train":
         classes = st.session_state.class_names
         all_ready = all(st.session_state.img_counts.get(c, 0) >= 2 for c in classes)
         
-        st.markdown("### Step 2: Upload Training Images")
-        st.caption("Upload at least 3 images per class for best results")
+        st.markdown("### Step 2: Collect Training Images")
+        st.caption("Choose a class tab, then use Live Camera or Upload to add images")
         
-        tabs = st.tabs([f"  {c}  " for c in classes])
+        tabs = st.tabs([f"📸 {c}" for c in classes])
         for i, cls in enumerate(classes):
             with tabs[i]:
                 cnt = st.session_state.img_counts.get(cls, 0)
-                st.metric(f"Images for {cls}", cnt)
+                st.metric(f"Total Images for {cls}", cnt)
                 
-                uploaded = st.file_uploader(
-                    f"Upload images",
-                    type=["jpg","jpeg","png","webp","bmp"],
-                    accept_multiple_files=True,
-                    key=f"up_{cls}",
+                # ── Collection Method ──────────────────────────────
+                st.markdown("##### 📥 Choose Collection Method")
+                collect_method = st.radio(
+                    f"Method for {cls}:",
+                    ["📁 Upload Files", "📷 Live Camera"],
+                    horizontal=True,
+                    key=f"collect_method_{cls}"
                 )
                 
-                if cls not in st.session_state.uploaded_tracker:
-                    st.session_state.uploaded_tracker[cls] = set()
+                if collect_method == "📁 Upload Files":
+                    uploaded = st.file_uploader(
+                        f"Upload images for {cls}",
+                        type=["jpg","jpeg","png","webp","bmp"],
+                        accept_multiple_files=True,
+                        key=f"up_{cls}",
+                    )
+                    
+                    if cls not in st.session_state.uploaded_tracker:
+                        st.session_state.uploaded_tracker[cls] = set()
+                    
+                    if uploaded:
+                        new = [f for f in uploaded if f.name not in st.session_state.uploaded_tracker[cls]]
+                        if new:
+                            bar = st.progress(0, text="Uploading...")
+                            ok_count = 0
+                            for j, uf in enumerate(new):
+                                try:
+                                    img_bytes = pil_to_bytes(Image.open(uf).convert("RGB"))
+                                    result = api_upload(cls, img_bytes, uf.name)
+                                    if result is not None:
+                                        st.session_state.img_counts[cls] = result
+                                        st.session_state.uploaded_tracker[cls].add(uf.name)
+                                        ok_count += 1
+                                except:
+                                    pass
+                                bar.progress((j+1)/len(new), text=f"Uploading {j+1}/{len(new)}...")
+                            bar.empty()
+                            if ok_count:
+                                st.success(f"✅ {ok_count} images added to **{cls}**")
+                                st.rerun()
                 
-                if uploaded:
-                    new = [f for f in uploaded if f.name not in st.session_state.uploaded_tracker[cls]]
-                    if new:
-                        bar = st.progress(0, text="Uploading...")
-                        ok_count = 0
-                        for j, uf in enumerate(new):
-                            try:
-                                img_bytes = pil_to_bytes(Image.open(uf).convert("RGB"))
-                                result = api_upload(cls, img_bytes, uf.name)
+                else:  # Live Camera
+                    st.info(f"📷 Capture photos for **{cls}** using live camera")
+                    
+                    # Capture button
+                    cam_img = st.camera_input(f"Take photo for {cls}", key=f"cam_{cls}")
+                    
+                    if cam_img:
+                        try:
+                            img = Image.open(cam_img).convert("RGB")
+                            st.image(img, width=200, caption="Captured Photo")
+                            img_bytes = pil_to_bytes(img)
+                            
+                            if st.button(f"✅ Save to {cls}", key=f"save_cam_{cls}"):
+                                fname = f"camera_{cls}_{datetime.now().strftime('%H%M%S')}.jpg"
+                                result = api_upload(cls, img_bytes, fname)
                                 if result is not None:
                                     st.session_state.img_counts[cls] = result
-                                    st.session_state.uploaded_tracker[cls].add(uf.name)
-                                    ok_count += 1
-                            except:
-                                pass
-                            bar.progress((j+1)/len(new), text=f"Uploading {j+1}/{len(new)}...")
-                        bar.empty()
-                        if ok_count:
-                            st.success(f"✅ {ok_count} images added to **{cls}**")
-                            st.rerun()
+                                    if cls not in st.session_state.uploaded_tracker:
+                                        st.session_state.uploaded_tracker[cls] = set()
+                                    st.session_state.uploaded_tracker[cls].add(fname)
+                                    st.success(f"✅ Photo saved to **{cls}**! Total: {result}")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to save photo.")
+                        except Exception as e:
+                            st.error(f"Camera error: {str(e)}")
         
         st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
         
@@ -452,27 +490,25 @@ elif st.session_state.active_tab == "🎓 Train":
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🔍 PREDICT PAGE (3 Options: Saved Model + Upload Model + Live Camera)
+# 🔍 PREDICT PAGE (Saved + Upload + Live Camera)
 # ═══════════════════════════════════════════════════════════════════════════
 elif st.session_state.active_tab == "🔍 Predict":
     st.markdown("# 🔍 Predict")
     st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
     
-    # ── TAB: Choose Model Source ──────────────────────────────────────
     st.markdown("### 📂 Choose Model Source")
     
-    model_tab1, model_tab2, model_tab3 = st.tabs(["💾 Saved Models", "📤 Upload Pre-Trained Model", "📌 Current Trained Model"])
+    model_tab1, model_tab2, model_tab3 = st.tabs(["💾 Saved Models", "📤 Upload Pre-Trained", "📌 Current Model"])
     
     with model_tab1:
-        st.markdown("**Load a previously saved model**")
         result = api("get", "/model/list")
         saved_models = result.get("models", []) if result else []
         
         if saved_models:
-            saved_options = [f"💾 {m['name']} | Accuracy: {round(m['accuracy']*100,1)}% | Classes: {', '.join(m['classes'])}" for m in saved_models]
-            saved_selected = st.selectbox("Select saved model:", saved_options, key="saved_select")
+            saved_options = [f"💾 {m['name']} | Acc: {round(m['accuracy']*100,1)}% | {', '.join(m['classes'])}" for m in saved_models]
+            saved_selected = st.selectbox("Select model:", saved_options, key="saved_select")
             
-            if st.button("📂 Load Selected Model", use_container_width=True, key="load_saved"):
+            if st.button("📂 Load Saved Model", use_container_width=True, key="load_saved"):
                 model_name = saved_selected.split(" | ")[0].replace("💾 ", "")
                 r = api("post", f"/model/load/{model_name}")
                 if r:
@@ -487,20 +523,17 @@ elif st.session_state.active_tab == "🔍 Predict":
                     st.success(f"✅ Model **{model_name}** loaded!")
                     st.rerun()
         else:
-            st.info("No saved models found. Train a model first!")
+            st.info("No saved models found.")
     
     with model_tab2:
-        st.markdown("**Upload a pre-trained .pkl model file**")
-        uploaded_file = st.file_uploader("Choose .pkl file", type=["pkl"], key="upload_model_file")
+        uploaded_file = st.file_uploader("Upload .pkl model file", type=["pkl"], key="upload_model_file")
         
         if uploaded_file:
             try:
-                # Save uploaded file temporarily
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as tmp:
                     tmp.write(uploaded_file.read())
                     tmp_path = tmp.name
                 
-                # Load model
                 import pickle as pkl
                 with open(tmp_path, "rb") as f:
                     model_data = pkl.load(f)
@@ -515,90 +548,66 @@ elif st.session_state.active_tab == "🔍 Predict":
                 st.session_state.confusion_matrix = model_data.get("confusion_matrix", [])
                 
                 st.success(f"✅ Model uploaded! Classes: {', '.join(st.session_state.class_names)}")
-                
-                # Clean up
                 os.unlink(tmp_path)
                 st.rerun()
             except Exception as e:
-                st.error(f"❌ Invalid model file: {str(e)}")
+                st.error(f"❌ Invalid file: {str(e)}")
     
     with model_tab3:
-        st.markdown("**Use currently trained model**")
         if st.session_state.trained:
-            st.success(f"✅ Current model ready! Accuracy: {st.session_state.accuracy}% | Classes: {', '.join(st.session_state.class_names)}")
-            st.session_state.uploaded_model = None
+            st.success(f"✅ Current model ready! Acc: {st.session_state.accuracy}% | {', '.join(st.session_state.class_names)}")
         else:
-            st.warning("No trained model loaded. Train or load a model first.")
+            st.warning("No trained model loaded.")
     
     st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
     
-    # ── PREDICTION SECTION ──────────────────────────────────────────
     if st.session_state.class_names:
         st.markdown("### 🎥 Live Camera Prediction")
-        st.caption(f"Active Classes: **{', '.join(st.session_state.class_names)}**")
         
-        if "live_camera" not in st.session_state:
-            st.session_state.live_camera = False
+        if "predict_live" not in st.session_state:
+            st.session_state.predict_live = False
         
         col1, col2 = st.columns([1, 3])
         with col1:
-            if not st.session_state.live_camera:
+            if not st.session_state.predict_live:
                 if st.button("▶️ Start Live Camera", use_container_width=True, type="primary"):
-                    st.session_state.live_camera = True
+                    st.session_state.predict_live = True
                     st.rerun()
             else:
-                if st.button("⏹️ Stop Live Camera", use_container_width=True):
-                    st.session_state.live_camera = False
+                if st.button("⏹️ Stop", use_container_width=True):
+                    st.session_state.predict_live = False
                     st.rerun()
         
-        if st.session_state.live_camera:
-            st.info("📷 Camera is LIVE! Point at something to predict.")
-            live_img = st.camera_input("Live Camera Feed", key="live_cam")
-            
+        if st.session_state.predict_live:
+            live_img = st.camera_input("Live Feed", key="live_cam")
             if live_img:
                 try:
                     img = Image.open(live_img).convert("RGB")
                     test_bytes = pil_to_bytes(img)
-                    
-                    with st.spinner("Predicting..."):
-                        result = api_predict(test_bytes)
+                    result = api_predict(test_bytes)
                     
                     if result:
                         top = result["prediction"]
                         conf = result["confidence"]
-                        
-                        if conf >= 90:
-                            color = "#4ade80"
-                        elif conf >= 70:
-                            color = "#fbbf24"
-                        else:
-                            color = "#f87171"
+                        color = "#4ade80" if conf >= 90 else "#fbbf24" if conf >= 70 else "#f87171"
                         
                         st.markdown(f"""
-                        <div style="background: linear-gradient(135deg, rgba(102,126,234,0.3), rgba(118,75,162,0.3)); 
-                                    border: 3px solid {color}; border-radius: 20px; 
-                                    padding: 1.5rem; text-align: center; margin: 1rem 0;">
-                            <h2 style="color: white; margin: 0; font-size: 2rem;">{top}</h2>
-                            <p style="color: {color}; font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0;">{conf}% confidence</p>
+                        <div style="background: rgba(102,126,234,0.2); border: 3px solid {color}; 
+                                    border-radius: 20px; padding: 1.5rem; text-align: center;">
+                            <h2 style="color:white;">{top}</h2>
+                            <p style="color:{color};font-size:1.5rem;font-weight:700;">{conf}%</p>
                         </div>
                         """, unsafe_allow_html=True)
-                        
-                        with st.expander("📊 View All Probabilities"):
-                            for prob in result["probabilities"]:
-                                pct = round(prob["probability"] * 100, 1)
-                                st.markdown(f"**{prob['class']}**: {pct}%")
-                                st.progress(int(pct))
-                except Exception as e:
-                    st.error(f"Prediction error: {str(e)}")
+                except:
+                    pass
         
         st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
         
-        st.markdown("### 📁 Or Upload Image")
-        
+        st.markdown("### 📁 Upload Image to Predict")
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            f = st.file_uploader("Select an image", type=["jpg","jpeg","png","webp"], key="upload_img")
+            f = st.file_uploader("Choose image", type=["jpg","jpeg","png","webp"], key="upload_img")
             if f:
                 img = Image.open(f).convert("RGB")
                 st.image(img, use_column_width=True)
@@ -624,11 +633,10 @@ elif st.session_state.active_tab == "🔍 Predict":
                         text_color = "#f87171"
                     
                     st.markdown(f"""
-                    <div style="background: linear-gradient(135deg, rgba(102,126,234,0.15), rgba(118,75,162,0.15)); 
-                                border: 2px solid {border_color}; border-radius: 20px; 
-                                padding: 2rem; text-align: center;">
-                        <h1 style="font-size: 3.5rem; color: white; margin: 0.5rem 0;">{top}</h1>
-                        <p style="font-size: 1.8rem; color: {text_color}; font-weight: 700;">{conf}%</p>
+                    <div style="background: rgba(102,126,234,0.15); border: 2px solid {border_color}; 
+                                border-radius: 20px; padding: 2rem; text-align: center;">
+                        <h1 style="font-size:3.5rem;color:white;">{top}</h1>
+                        <p style="font-size:1.8rem;color:{text_color};font-weight:700;">{conf}%</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -648,7 +656,7 @@ elif st.session_state.active_tab == "📊 Analytics":
     st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
     
     if not st.session_state.trained:
-        st.info("👈 No model loaded! Train a model or load a saved model first.")
+        st.info("👈 No model loaded! Train or load a model first.")
     else:
         if st.session_state.training_history:
             st.markdown("### 📉 Training Progress")
@@ -665,7 +673,7 @@ elif st.session_state.active_tab == "📊 Analytics":
                     fig.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("📉 No training history available for this model.")
+            st.info("📉 No training history available.")
         
         st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
         
@@ -681,7 +689,7 @@ elif st.session_state.active_tab == "📊 Analytics":
             fig.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("🎯 No confusion matrix available for this model.")
+            st.info("🎯 No confusion matrix available.")
         
         st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
         
@@ -690,13 +698,9 @@ elif st.session_state.active_tab == "📊 Analytics":
         with col1:
             st.metric("Accuracy", f"{st.session_state.accuracy}%")
         with col2:
-            st.metric("Number of Classes", len(classes) if classes else 0)
+            st.metric("Classes", len(classes) if classes else 0)
         with col3:
-            st.metric("Model Name", st.session_state.selected_model_name or "Current Model")
-        
-        if classes:
-            st.markdown("#### Classes")
-            st.write(", ".join(classes))
+            st.metric("Model", st.session_state.selected_model_name or "Current")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -710,18 +714,15 @@ elif st.session_state.active_tab == "💾 Models":
     models = result.get("models", []) if result else []
     
     if not models:
-        st.info("No saved models yet. Train and save a model from the **🎓 Train** tab.")
+        st.info("No saved models yet. Train and save a model from **🎓 Train** tab.")
     else:
-        st.markdown(f"**{len(models)} model{'s' if len(models) != 1 else ''} saved**")
-        
         for m in models:
             col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
             with col1:
                 st.markdown(f"**{m['name']}**")
                 st.caption(f"Classes: {', '.join(m['classes'])}")
-                st.caption(f"Saved: {m.get('saved_at', 'Unknown')}")
             with col2:
-                st.metric("Accuracy", f"{round(m['accuracy']*100,1)}%")
+                st.metric("Acc", f"{round(m['accuracy']*100,1)}%")
             with col3:
                 if st.button("📂 Load", key=f"load_{m['name']}"):
                     r = api("post", f"/model/load/{m['name']}")
@@ -730,14 +731,13 @@ elif st.session_state.active_tab == "💾 Models":
                         st.session_state.accuracy = r.get("accuracy", 0)
                         st.session_state.class_names = r.get("classes", [])
                         st.session_state.classes_confirmed = True
-                        st.session_state.img_counts = {c: 0 for c in r.get("classes", [])}
                         st.session_state.selected_model_name = m['name']
                         st.session_state.training_history = r.get("history", [])
                         st.session_state.confusion_matrix = r.get("confusion_matrix", [])
-                        st.success(f"✅ Model **{m['name']}** loaded!")
+                        st.success(f"✅ Loaded!")
                         st.rerun()
             with col4:
-                if st.button("🗑️ Delete", key=f"del_{m['name']}"):
+                if st.button("🗑️", key=f"del_{m['name']}"):
                     api("delete", f"/model/{m['name']}")
                     st.rerun()
 
@@ -755,25 +755,13 @@ elif st.session_state.active_tab == "⚙️ Settings":
     st.markdown("### 🎛️ Model Configuration")
     
     with st.form("settings_form"):
-        augment = st.checkbox("Data Augmentation", value=cur_settings.get("augment", True),
-                              help="Auto-generates flipped, rotated, brightness versions")
+        augment = st.checkbox("Data Augmentation", value=cur_settings.get("augment", True))
         epochs = st.slider("Training Epochs", 10, 100, cur_settings.get("epochs", 50))
-        batch_size = st.selectbox("Batch Size", [8, 16, 32], index=1)
-        learning_rate = st.select_slider(
-            "Learning Rate",
-            options=[0.0001, 0.0005, 0.001, 0.005, 0.01],
-            value=0.001
-        )
+        learning_rate = st.select_slider("Learning Rate", options=[0.0001, 0.0005, 0.001, 0.005, 0.01], value=0.001)
         
         if st.form_submit_button("💾 Save Settings", use_container_width=True):
-            r = api("post", "/settings", json={
-                "augment": augment,
-                "epochs": epochs,
-                "batch_size": batch_size,
-                "learning_rate": learning_rate
-            })
-            if r:
-                st.success("✅ Settings saved! They will be used on next training.")
+            api("post", "/settings", json={"augment": augment, "epochs": epochs, "learning_rate": learning_rate})
+            st.success("✅ Settings saved!")
     
     st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
     
@@ -784,7 +772,7 @@ elif st.session_state.active_tab == "⚙️ Settings":
         <ul style="color: rgba(255,255,255,0.7);">
             <li><strong>Backend:</strong> FastAPI + PyTorch + MobileNetV3</li>
             <li><strong>Frontend:</strong> Streamlit + Plotly</li>
-            <li><strong>Features:</strong> Transfer Learning, Data Augmentation, Live Camera, Upload Pre-Trained Model</li>
+            <li><strong>Features:</strong> Transfer Learning, Live Camera, Upload Pre-Trained Model</li>
             <li><strong>Privacy:</strong> 100% Local Processing</li>
         </ul>
     </div>

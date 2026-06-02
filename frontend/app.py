@@ -14,7 +14,7 @@ import plotly.express as px
 import pandas as pd
 
 # ✅ PRODUCTION: Hugging Face Backend URL
-API = "https://Zay7ab-visionforge-backend.hf.space"
+API = "https://TERA_USERNAME-visionforge-backend.hf.space"
 
 st.set_page_config(
     page_title="VisionForge",
@@ -447,7 +447,7 @@ elif st.session_state.active_tab == "🎓 Train":
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 🔍 PREDICT PAGE (With Model Selection)
+# 🔍 PREDICT PAGE (With Model Selection + Camera Fix)
 # ═══════════════════════════════════════════════════════════════════════════
 elif st.session_state.active_tab == "🔍 Predict":
     st.markdown("# 🔍 Predict")
@@ -523,11 +523,19 @@ elif st.session_state.active_tab == "🔍 Predict":
                     st.image(img, use_column_width=True)
                     test_bytes = pil_to_bytes(img)
             else:
+                # ✅ Camera with better guidance
+                st.info("📷 Allow camera permission when prompted. Then click 'Take a photo' below.")
                 cam = st.camera_input("Take a photo", key="cam")
                 if cam:
-                    img = Image.open(cam).convert("RGB")
-                    st.image(img, use_column_width=True)
-                    test_bytes = pil_to_bytes(img)
+                    try:
+                        img = Image.open(cam).convert("RGB")
+                        st.image(img, use_column_width=True)
+                        test_bytes = pil_to_bytes(img)
+                        st.success("✅ Photo captured! Predicting...")
+                    except Exception as e:
+                        st.error(f"❌ Camera error. Please allow camera permissions in browser settings.")
+                else:
+                    st.caption("👆 Click the camera button above to capture a photo")
         
         with col2:
             st.markdown("#### 🔮 Prediction Result")
@@ -584,6 +592,11 @@ elif st.session_state.active_tab == "🔍 Predict":
                     
                 else:
                     st.error("❌ Prediction failed. Please check backend connection.")
+            else:
+                if mode == "📷 Camera":
+                    st.info("📷 Click the 'Take a photo' button to capture and get prediction.")
+                else:
+                    st.info("📁 Upload an image to get prediction.")
     else:
         st.info("👈 Please select and load a model first to start predicting.")
 
